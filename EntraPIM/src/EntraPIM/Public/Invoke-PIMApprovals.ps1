@@ -44,25 +44,38 @@ function Invoke-PIMApprovals {
     Clear-Host
     Write-Host "`n=== Microsoft Entra PIM Approval Processing ===`n" -ForegroundColor Cyan
     
+    $foundApprovals = $false
+    
     # Process role approvals if requested
     if ($ProcessRoles) {
         Write-Host "`n--- Pending PIM Role Approvals ---" -ForegroundColor Magenta
         $roleApprovals = @(Get-PendingRoleApprovals)
-        Process-RoleApprovals -Approvals $roleApprovals
+        
+        if ($roleApprovals.Count -gt 0) {
+            Process-RoleApprovals -Approvals $roleApprovals
+            $foundApprovals = $true
+        } else {
+            Write-Host "No pending role approvals found." -ForegroundColor Green
+        }
     }
     
     # Process group approvals if requested
     if ($ProcessGroups) {
         Write-Host "`n--- Pending PIM Group Approvals ---" -ForegroundColor Magenta
         $groupApprovals = @(Get-PendingGroupApprovals)
-        Process-GroupApprovals -Approvals $groupApprovals
+        
+        if ($groupApprovals.Count -gt 0) {
+            Process-GroupApprovals -Approvals $groupApprovals
+            $foundApprovals = $true
+        } else {
+            Write-Host "No pending group approvals found." -ForegroundColor Green
+        }
     }
     
     # Show summary
-    if (($roleApprovals.Count -eq 0 -or !$ProcessRoles) -and ($groupApprovals.Count -eq 0 -or !$ProcessGroups)) {
-        Write-Host "`nNo pending approvals found." -ForegroundColor Green
-    }
-    else {
+    if (-not $foundApprovals) {
+        Write-Host "`nNo pending approvals found. You're all caught up!" -ForegroundColor Green
+    } else {
         Write-Host "`n✅ Processing complete." -ForegroundColor Cyan
     }
     
@@ -145,7 +158,8 @@ function Process-RoleApprovals {
         [array]$Approvals
     )
     
-    if ($Approvals.Count -eq 0) {
+    # Safety check to prevent errors with empty collections
+    if ($null -eq $Approvals -or $Approvals.Count -eq 0) {
         Write-Host "No pending role approvals." -ForegroundColor Green
         return
     }
@@ -234,7 +248,8 @@ function Process-GroupApprovals {
         [array]$Approvals
     )
     
-    if ($Approvals.Count -eq 0) {
+    # Safety check to prevent errors with empty collections
+    if ($null -eq $Approvals -or $Approvals.Count -eq 0) {
         Write-Host "No pending group approvals." -ForegroundColor Green
         return
     }

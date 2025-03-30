@@ -9,6 +9,9 @@
     This function presents a menu interface for activating, deactivating, and extending
     PIM (Privileged Identity Management) role and group assignments. Unlike the original
     script, this function keeps the menu active until the user explicitly chooses to exit.
+    
+    The function supports bulk activation, allowing users to select multiple roles or groups 
+    at once by entering a comma-separated list of menu indices (e.g., "1,3,5").
 
 .PARAMETER IncludeRoles
     Include role assignments in the menu. Default is $true.
@@ -28,6 +31,10 @@
     Invoke-PIMActivation -IncludeGroups $false -DefaultDuration 4
     
     Opens the interactive PIM activation menu with only roles and a default duration of 4 hours.
+    
+.EXAMPLE
+    # Bulk activation example
+    # At the menu prompt, enter "1,3,5" to select and process items 1, 3, and 5 sequentially.
 #>
 function Invoke-PIMActivation {
     [CmdletBinding()]
@@ -52,6 +59,206 @@ function Invoke-PIMActivation {
     $currentUser = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/me"
     $userId = $currentUser.id
     
+    # Function to process a single PIM assignment
+    function Process-PIMAssignment {
+        param($selectedItem, $userId, $DefaultDuration)
+        
+        Write-Host "`nProcessing [$($selectedItem.State) $($selectedItem.Type)] '$($selectedItem.Name)'." -ForegroundColor White
+        
+        # Determine action based on assignment state
+        if ($selectedItem.State -eq "Eligible") {
+            $action = "selfActivate"
+            Write-Host "Action: Activate eligible assignment." -ForegroundColor Green
+            
+            # Prompt for duration and justification
+            $durationInput = Read-Host "Enter duration in hours (default: $DefaultDuration)"
+            $duration = if ([string]::IsNullOrEmpty($durationInput)) { $DefaultDuration } else { [double]$durationInput }
+            $justification = Read-Host "Enter justification (if required)"
+            $ticket = Read-Host "Enter ticket info (if required)"
+            
+            # Create schedule info
+            $scheduleInfo = New-PIMScheduleInfo -DurationHours $duration
+            
+            # Build payload based on type
+            if ($selectedItem.Type -eq "Role") {
+                $payload = New-PIMRolePayload -UserId $userId -RoleDefinitionId $selectedItem.RoleDefinitionId `
+                                             -Action $action -ScheduleInfo $scheduleInfo `
+                                             -Justification $justification -TicketNumber $ticket
+                $endpoint = "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleRequests"
+            }
+            else {
+                $payload = New-PIMGroupPayload -UserId $userId -GroupId $selectedItem.GroupId `
+                                              -Action $action -ScheduleInfo $scheduleInfo `
+                                              -Justification $justification -TicketNumber $ticket
+                $endpoint = "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests"
+            }
+            
+            # Validate payload
+            $payload.isValidationOnly = $true
+            $payload = Test-Payload -Payload $payload -Endpoint $endpoint
+            $payload.isValidationOnly = $false
+            
+            # Submit request
+            try {
+                $jsonPayload = $payload | ConvertTo-Json -Depth 5
+                Write-Host "`nActivating $($selectedItem.Type.ToLower())..." -ForegroundColor Cyan
+                $response = Invoke-MgGraphRequest -Method POST -Uri $endpoint -Body $jsonPayload -ContentType "application/json"
+                Write-Host "Assignment activated successfully." -ForegroundColor Green
+                
+                # Display result
+                Write-Host "`nResponse:" -ForegroundColor Green
+                $response | Format-Table
+            }
+            catch {
+                $errorDetails = Get-ErrorDetails -ErrorRecord $_
+                Write-Host "`nError during activation:" -ForegroundColor Red
+                Write-Host $errorDetails.Message -ForegroundColor Red
+                Write-Host $errorDetails.Details -ForegroundColor Red
+            }
+        }
+        elseif ($selectedItem.State -eq "Active") {
+            $choice = Read-Host "Assignment is active. Would you like to Extend (E) or Deactivate (D)? (E/D)"
+            
+            if ($choice -match "^[Ee]") {
+                if (Test-AssignmentLock $selectedItem.Raw) { 
+                    Write-Host "Cannot extend: Less than 5 minutes since activation." -ForegroundColor Red
+                    return $false
+                }
+                
+                $action = "extend"
+                Write-Host "Action: Extend active assignment." -ForegroundColor Green
+                
+                # First deactivate the current assignment
+                Write-Host "`nExtending assignment: Sending deactivation request first..." -ForegroundColor Cyan
+                
+                if ($selectedItem.Type -eq "Role") {
+                    $deactPayload = New-PIMRolePayload -UserId $userId -RoleDefinitionId $selectedItem.RoleDefinitionId -Action "selfDeactivate"
+                    $endpoint = "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleRequests"
+                }
+                else {
+                    $deactPayload = New-PIMGroupPayload -UserId $userId -GroupId $selectedItem.GroupId -Action "selfDeactivate"
+                    $endpoint = "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests"
+                }
+                
+                try {
+                    $jsonDeact = $deactPayload | ConvertTo-Json -Depth 5
+                    Invoke-MgGraphRequest -Method POST -Uri $endpoint -Body $jsonDeact -ContentType "application/json" | Out-Null
+                    Write-Host "Deactivation succeeded." -ForegroundColor Green
+                }
+                catch {
+                    $errorDetails = Get-ErrorDetails -ErrorRecord $_
+                    Write-Host "Error during deactivation for extension:" -ForegroundColor Red
+                    Write-Host $errorDetails.Message -ForegroundColor Red
+                    Write-Host $errorDetails.Details -ForegroundColor Red
+                    return $false
+                }
+                
+                if (-not (Wait-ForDeactivation -Type $selectedItem.Type -Id ($selectedItem.Type -eq "Role" ? $selectedItem.RoleDefinitionId : $selectedItem.GroupId))) {
+                    Write-Host "Timed out waiting for deactivation. Exiting." -ForegroundColor Red
+                    return $false
+                }
+                
+                # Now reactivate with new duration
+                $durationInput = Read-Host "Enter duration in hours (default: $DefaultDuration)"
+                $duration = if ([string]::IsNullOrEmpty($durationInput)) { $DefaultDuration } else { [double]$durationInput }
+                $justification = Read-Host "Enter justification (if required)"
+                $ticket = Read-Host "Enter ticket info (if required)"
+                
+                # Create schedule info
+                $scheduleInfo = New-PIMScheduleInfo -DurationHours $duration
+                
+                # Build payload for activation after extension
+                if ($selectedItem.Type -eq "Role") {
+                    $payload = New-PIMRolePayload -UserId $userId -RoleDefinitionId $selectedItem.RoleDefinitionId `
+                                                 -Action "selfActivate" -ScheduleInfo $scheduleInfo `
+                                                 -Justification $justification -TicketNumber $ticket
+                    $endpoint = "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleRequests"
+                }
+                else {
+                    $payload = New-PIMGroupPayload -UserId $userId -GroupId $selectedItem.GroupId `
+                                                  -Action "selfActivate" -ScheduleInfo $scheduleInfo `
+                                                  -Justification $justification -TicketNumber $ticket
+                    $endpoint = "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests"
+                }
+                
+                # Validate payload
+                $payload.isValidationOnly = $true
+                $payload = Test-Payload -Payload $payload -Endpoint $endpoint
+                $payload.isValidationOnly = $false
+                
+                # Submit request
+                try {
+                    $jsonPayload = $payload | ConvertTo-Json -Depth 5
+                    Write-Host "`nReactivating $($selectedItem.Type.ToLower()) with extended duration..." -ForegroundColor Cyan
+                    $response = Invoke-MgGraphRequest -Method POST -Uri $endpoint -Body $jsonPayload -ContentType "application/json"
+                    Write-Host "Assignment extended successfully." -ForegroundColor Green
+                    
+                    # Display result
+                    Write-Host "`nResponse:" -ForegroundColor Green
+                    $response | Format-Table
+                }
+                catch {
+                    $errorDetails = Get-ErrorDetails -ErrorRecord $_
+                    Write-Host "`nError during extension:" -ForegroundColor Red
+                    Write-Host $errorDetails.Message -ForegroundColor Red
+                    Write-Host $errorDetails.Details -ForegroundColor Red
+                    return $false
+                }
+            }
+            elseif ($choice -match "^[Dd]") {
+                if (Test-AssignmentLock $selectedItem.Raw) { 
+                    Write-Host "Cannot deactivate: Less than 5 minutes since activation." -ForegroundColor Red
+                    return $false
+                }
+                
+                $action = "selfDeactivate"
+                Write-Host "Action: Deactivate active assignment." -ForegroundColor Green
+                
+                # Build payload based on type
+                if ($selectedItem.Type -eq "Role") {
+                    $payload = New-PIMRolePayload -UserId $userId -RoleDefinitionId $selectedItem.RoleDefinitionId -Action $action
+                    $endpoint = "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleRequests"
+                }
+                else {
+                    $payload = New-PIMGroupPayload -UserId $userId -GroupId $selectedItem.GroupId -Action $action
+                    $endpoint = "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests"
+                }
+                
+                # Submit request
+                try {
+                    $jsonPayload = $payload | ConvertTo-Json -Depth 5
+                    Write-Host "`nDeactivating $($selectedItem.Type.ToLower())..." -ForegroundColor Cyan
+                    $response = Invoke-MgGraphRequest -Method POST -Uri $endpoint -Body $jsonPayload -ContentType "application/json"
+                    Write-Host "Assignment deactivation request submitted." -ForegroundColor Green
+                    
+                    if (-not (Wait-ForDeactivation -Type $selectedItem.Type -Id ($selectedItem.Type -eq "Role" ? $selectedItem.RoleDefinitionId : $selectedItem.GroupId))) {
+                        Write-Host "Timed out waiting for deactivation to complete." -ForegroundColor Red
+                    }
+                    else {
+                        Write-Host "Assignment deactivated successfully." -ForegroundColor Green
+                    }
+                }
+                catch {
+                    $errorDetails = Get-ErrorDetails -ErrorRecord $_
+                    Write-Host "`nError during deactivation:" -ForegroundColor Red
+                    Write-Host $errorDetails.Message -ForegroundColor Red
+                    Write-Host $errorDetails.Details -ForegroundColor Red
+                    return $false
+                }
+            }
+            else { 
+                Write-Host "Invalid choice." -ForegroundColor Yellow
+                return $false
+            }
+        }
+        else { 
+            Write-Host "Unknown assignment state." -ForegroundColor Red
+            return $false
+        }
+        
+        return $true
+    }
+    
     # Main menu loop - continue until user chooses to exit
     $exitRequested = $false
     
@@ -60,6 +267,7 @@ function Invoke-PIMActivation {
         Write-Host "`n=== EntraPIM Role/Group Activation Menu ===`n" -ForegroundColor Cyan
         Write-Host "Getting PIM roles and groups for user: $($currentUser.displayName) ($userId)" -ForegroundColor White
         Write-Host "Note: Recently activated roles require a 5-minute waiting period before they can be modified." -ForegroundColor Yellow
+        Write-Host "TIP: You can select multiple items using comma-separated values (e.g., '1,3,5')" -ForegroundColor Green
         
         # Get current assignments
         $assignments = Get-PIMAssignments -IncludeRoles $IncludeRoles -IncludeGroups $IncludeGroups
@@ -103,6 +311,7 @@ function Invoke-PIMActivation {
         
         # Show menu options
         Write-Host "`n=== PIM Activation/Modification Menu ===" -ForegroundColor Cyan
+        Write-Host "Select one or more assignments (comma-separated, e.g., '1,3,5'):" -ForegroundColor Magenta
         $menuItems | ForEach-Object { Write-Host "$($_.MenuIndex). [$($_.State) $($_.Type)] $($_.Name)" -ForegroundColor White }
         
         # Add approval menu option if we have approvals functionality
@@ -135,234 +344,42 @@ function Invoke-PIMActivation {
             }
             continue
         }
-        elseif ($selection -match "^\d+$") {
-            # User selected an assignment to modify
-            $selectedItem = $menuItems | Where-Object { $_.MenuIndex -eq [int]$selection }
+        elseif ($selection -match "^[\d,]+$") {
+            # User selected one or more assignments
+            # Split the selection into individual indices
+            $selectedIndices = $selection -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
             
-            if (-not $selectedItem) { 
-                Write-Host "Invalid selection." -ForegroundColor Yellow 
-                Start-Sleep -Seconds 2
-                continue
-            }
-            
-            if ($selectedItem.Locked) { 
-                Write-Host "Selected assignment is locked. Cannot modify." -ForegroundColor Red
-                Start-Sleep -Seconds 2
-                continue
-            }
-            
-            Write-Host "You selected [$($selectedItem.State) $($selectedItem.Type)] '$($selectedItem.Name)'." -ForegroundColor White
-            
-            # Determine action based on assignment state
-            if ($selectedItem.State -eq "Eligible") {
-                $action = "selfActivate"
-                Write-Host "Action: Activate eligible assignment." -ForegroundColor Green
+            if ($selectedIndices.Count -gt 0) {
+                Write-Host "`nProcessing $($selectedIndices.Count) selected items..." -ForegroundColor Cyan
                 
-                # Prompt for duration and justification
-                $durationInput = Read-Host "Enter duration in hours (default: $DefaultDuration)"
-                $duration = if ([string]::IsNullOrEmpty($durationInput)) { $DefaultDuration } else { [double]$durationInput }
-                $justification = Read-Host "Enter justification (if required)"
-                $ticket = Read-Host "Enter ticket info (if required)"
-                
-                # Create schedule info
-                $scheduleInfo = New-PIMScheduleInfo -DurationHours $duration
-                
-                # Build payload based on type
-                if ($selectedItem.Type -eq "Role") {
-                    $payload = New-PIMRolePayload -UserId $userId -RoleDefinitionId $selectedItem.RoleDefinitionId `
-                                                 -Action $action -ScheduleInfo $scheduleInfo `
-                                                 -Justification $justification -TicketNumber $ticket
-                    $endpoint = "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleRequests"
-                }
-                else {
-                    $payload = New-PIMGroupPayload -UserId $userId -GroupId $selectedItem.GroupId `
-                                                  -Action $action -ScheduleInfo $scheduleInfo `
-                                                  -Justification $justification -TicketNumber $ticket
-                    $endpoint = "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests"
-                }
-                
-                # Validate payload
-                $payload.isValidationOnly = $true
-                $payload = Test-Payload -Payload $payload -Endpoint $endpoint
-                $payload.isValidationOnly = $false
-                
-                # Submit request
-                try {
-                    $jsonPayload = $payload | ConvertTo-Json -Depth 5
-                    Write-Host "`nActivating $($selectedItem.Type.ToLower())..." -ForegroundColor Cyan
-                    $response = Invoke-MgGraphRequest -Method POST -Uri $endpoint -Body $jsonPayload -ContentType "application/json"
-                    Write-Host "Assignment activated successfully." -ForegroundColor Green
+                foreach ($idx in $selectedIndices) {
+                    $selectedItem = $menuItems | Where-Object { $_.MenuIndex -eq [int]$idx }
                     
-                    # Display result
-                    Write-Host "`nResponse:" -ForegroundColor Green
-                    $response | Format-Table
-                    
-                    Write-Host "Press Enter to continue..." -ForegroundColor Cyan
-                    Read-Host | Out-Null
-                }
-                catch {
-                    $errorDetails = Get-ErrorDetails -ErrorRecord $_
-                    Write-Host "`nError during activation:" -ForegroundColor Red
-                    Write-Host $errorDetails.Message -ForegroundColor Red
-                    Write-Host $errorDetails.Details -ForegroundColor Red
-                    
-                    Write-Host "Press Enter to continue..." -ForegroundColor Cyan
-                    Read-Host | Out-Null
-                }
-            }
-            elseif ($selectedItem.State -eq "Active") {
-                $choice = Read-Host "Assignment is active. Would you like to Extend (E) or Deactivate (D)? (E/D)"
-                
-                if ($choice -match "^[Ee]") {
-                    if (Test-AssignmentLock $selectedItem.Raw) { 
-                        Write-Host "Cannot extend: Less than 5 minutes since activation." -ForegroundColor Red
-                        Start-Sleep -Seconds 3
+                    if (-not $selectedItem) {
+                        Write-Host "`nInvalid selection: $idx" -ForegroundColor Yellow
                         continue
                     }
                     
-                    $action = "extend"
-                    Write-Host "Action: Extend active assignment." -ForegroundColor Green
-                    
-                    # First deactivate the current assignment
-                    Write-Host "`nExtending assignment: Sending deactivation request first..." -ForegroundColor Cyan
-                    
-                    if ($selectedItem.Type -eq "Role") {
-                        $deactPayload = New-PIMRolePayload -UserId $userId -RoleDefinitionId $selectedItem.RoleDefinitionId -Action "selfDeactivate"
-                        $endpoint = "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleRequests"
-                    }
-                    else {
-                        $deactPayload = New-PIMGroupPayload -UserId $userId -GroupId $selectedItem.GroupId -Action "selfDeactivate"
-                        $endpoint = "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests"
-                    }
-                    
-                    try {
-                        $jsonDeact = $deactPayload | ConvertTo-Json -Depth 5
-                        Invoke-MgGraphRequest -Method POST -Uri $endpoint -Body $jsonDeact -ContentType "application/json" | Out-Null
-                        Write-Host "Deactivation succeeded." -ForegroundColor Green
-                    }
-                    catch {
-                        $errorDetails = Get-ErrorDetails -ErrorRecord $_
-                        Write-Host "Error during deactivation for extension:" -ForegroundColor Red
-                        Write-Host $errorDetails.Message -ForegroundColor Red
-                        Write-Host $errorDetails.Details -ForegroundColor Red
-                        
-                        Write-Host "Press Enter to continue..." -ForegroundColor Cyan
-                        Read-Host | Out-Null
+                    if ($selectedItem.Locked) {
+                        Write-Host "`nSelection $idx is locked and cannot be modified: $($selectedItem.Name)" -ForegroundColor Red
                         continue
                     }
                     
-                    if (-not (Wait-ForDeactivation -Type $selectedItem.Type -Id ($selectedItem.Type -eq "Role" ? $selectedItem.RoleDefinitionId : $selectedItem.GroupId))) {
-                        Write-Host "Timed out waiting for deactivation. Exiting." -ForegroundColor Red
-                        Start-Sleep -Seconds 3
-                        continue
-                    }
+                    # Process the selected item
+                    $result = Process-PIMAssignment -selectedItem $selectedItem -userId $userId -DefaultDuration $DefaultDuration
                     
-                    # Now reactivate with new duration
-                    $durationInput = Read-Host "Enter duration in hours (default: $DefaultDuration)"
-                    $duration = if ([string]::IsNullOrEmpty($durationInput)) { $DefaultDuration } else { [double]$durationInput }
-                    $justification = Read-Host "Enter justification (if required)"
-                    $ticket = Read-Host "Enter ticket info (if required)"
-                    
-                    # Create schedule info
-                    $scheduleInfo = New-PIMScheduleInfo -DurationHours $duration
-                    
-                    # Build payload for activation after extension
-                    if ($selectedItem.Type -eq "Role") {
-                        $payload = New-PIMRolePayload -UserId $userId -RoleDefinitionId $selectedItem.RoleDefinitionId `
-                                                     -Action "selfActivate" -ScheduleInfo $scheduleInfo `
-                                                     -Justification $justification -TicketNumber $ticket
-                        $endpoint = "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleRequests"
-                    }
-                    else {
-                        $payload = New-PIMGroupPayload -UserId $userId -GroupId $selectedItem.GroupId `
-                                                      -Action "selfActivate" -ScheduleInfo $scheduleInfo `
-                                                      -Justification $justification -TicketNumber $ticket
-                        $endpoint = "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests"
-                    }
-                    
-                    # Validate payload
-                    $payload.isValidationOnly = $true
-                    $payload = Test-Payload -Payload $payload -Endpoint $endpoint
-                    $payload.isValidationOnly = $false
-                    
-                    # Submit request
-                    try {
-                        $jsonPayload = $payload | ConvertTo-Json -Depth 5
-                        Write-Host "`nReactivating $($selectedItem.Type.ToLower()) with extended duration..." -ForegroundColor Cyan
-                        $response = Invoke-MgGraphRequest -Method POST -Uri $endpoint -Body $jsonPayload -ContentType "application/json"
-                        Write-Host "Assignment extended successfully." -ForegroundColor Green
-                        
-                        # Display result
-                        Write-Host "`nResponse:" -ForegroundColor Green
-                        $response | Format-Table
-                        
-                        Write-Host "Press Enter to continue..." -ForegroundColor Cyan
-                        Read-Host | Out-Null
-                    }
-                    catch {
-                        $errorDetails = Get-ErrorDetails -ErrorRecord $_
-                        Write-Host "`nError during extension:" -ForegroundColor Red
-                        Write-Host $errorDetails.Message -ForegroundColor Red
-                        Write-Host $errorDetails.Details -ForegroundColor Red
-                        
-                        Write-Host "Press Enter to continue..." -ForegroundColor Cyan
+                    # If we're not on the last item, prompt before continuing
+                    if ($idx -ne $selectedIndices[-1]) {
+                        Write-Host "`nPress Enter to continue with next selected item..." -ForegroundColor Cyan
                         Read-Host | Out-Null
                     }
                 }
-                elseif ($choice -match "^[Dd]") {
-                    if (Test-AssignmentLock $selectedItem.Raw) { 
-                        Write-Host "Cannot deactivate: Less than 5 minutes since activation." -ForegroundColor Red
-                        Start-Sleep -Seconds 3
-                        continue
-                    }
-                    
-                    $action = "selfDeactivate"
-                    Write-Host "Action: Deactivate active assignment." -ForegroundColor Green
-                    
-                    # Build payload based on type
-                    if ($selectedItem.Type -eq "Role") {
-                        $payload = New-PIMRolePayload -UserId $userId -RoleDefinitionId $selectedItem.RoleDefinitionId -Action $action
-                        $endpoint = "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleRequests"
-                    }
-                    else {
-                        $payload = New-PIMGroupPayload -UserId $userId -GroupId $selectedItem.GroupId -Action $action
-                        $endpoint = "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests"
-                    }
-                    
-                    # Submit request
-                    try {
-                        $jsonPayload = $payload | ConvertTo-Json -Depth 5
-                        Write-Host "`nDeactivating $($selectedItem.Type.ToLower())..." -ForegroundColor Cyan
-                        $response = Invoke-MgGraphRequest -Method POST -Uri $endpoint -Body $jsonPayload -ContentType "application/json"
-                        Write-Host "Assignment deactivation request submitted." -ForegroundColor Green
-                        
-                        if (-not (Wait-ForDeactivation -Type $selectedItem.Type -Id ($selectedItem.Type -eq "Role" ? $selectedItem.RoleDefinitionId : $selectedItem.GroupId))) {
-                            Write-Host "Timed out waiting for deactivation to complete." -ForegroundColor Red
-                        }
-                        else {
-                            Write-Host "Assignment deactivated successfully." -ForegroundColor Green
-                        }
-                        
-                        Write-Host "Press Enter to continue..." -ForegroundColor Cyan
-                        Read-Host | Out-Null
-                    }
-                    catch {
-                        $errorDetails = Get-ErrorDetails -ErrorRecord $_
-                        Write-Host "`nError during deactivation:" -ForegroundColor Red
-                        Write-Host $errorDetails.Message -ForegroundColor Red
-                        Write-Host $errorDetails.Details -ForegroundColor Red
-                        
-                        Write-Host "Press Enter to continue..." -ForegroundColor Cyan
-                        Read-Host | Out-Null
-                    }
-                }
-                else { 
-                    Write-Host "Invalid choice." -ForegroundColor Yellow
-                    Start-Sleep -Seconds 2
-                }
+                
+                Write-Host "`nAll selected items processed. Press Enter to return to menu..." -ForegroundColor Green
+                Read-Host | Out-Null
             }
-            else { 
-                Write-Host "Unknown assignment state." -ForegroundColor Red
+            else {
+                Write-Host "Invalid selection." -ForegroundColor Yellow
                 Start-Sleep -Seconds 2
             }
         }
