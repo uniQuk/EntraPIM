@@ -10,6 +10,8 @@ EntraPIM is a PowerShell module that simplifies the management of Microsoft Entr
 - **Extend active** role and group assignments
 - **Deactivate** active role and group assignments
 - **Process approvals** for pending PIM role and group requests
+- **Command-line activation** with configuration file support for quick activation without the menu
+- **Query approval requests** to get information about pending approvals
 - **Scriptable functions** for automation scenarios
 - **Comprehensive error handling** with detailed error information
 
@@ -60,7 +62,13 @@ Get-PIMAssignments
 # Launch the interactive PIM activation menu
 Invoke-PIMActivation
 
-# Check for and process pending approvals
+# Quick activate a role with command-line activation
+New-PIMActivation -Type Role -ResourceId "9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3" -Justification "Emergency access"
+
+# Check for pending approvals
+Get-PIMApprovals
+
+# Process pending approvals
 Invoke-PIMApprovals
 ```
 
@@ -92,9 +100,28 @@ Invoke-PIMActivation -IncludeGroups $false
 Invoke-PIMActivation -DefaultDuration 4
 ```
 
-### Processing Approvals
+### Command-Line Activation
 
 ```powershell
+# Activate a role using command line, with prompts for missing information
+New-PIMActivation -Type Role -ResourceId "9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3"
+
+# Activate with all details specified (no prompts)
+New-PIMActivation -Type Group -ResourceId "9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3" -Justification "Production support" -TicketNumber "INC12345" -Duration 8
+
+# Save preferences for future activations
+New-PIMActivation -Type Role -ResourceId "9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3" -Justification "Standard access" -Duration 4 -SaveConfig
+```
+
+### Working with Approvals
+
+```powershell
+# Get pending approval requests
+Get-PIMApprovals
+
+# Get only role approval requests
+Get-PIMApprovals -IncludeGroups $false
+
 # Process all pending approvals
 Invoke-PIMApprovals
 
@@ -107,21 +134,25 @@ Invoke-PIMApprovals -ProcessGroups $false
 | Command | Description |
 |---------|-------------|
 | `Get-PIMAssignments` | Gets the current user's PIM role and group assignments |
+| `Get-PIMApprovals` | Gets pending PIM approval requests that the user can approve |
 | `Invoke-PIMActivation` | Launches the interactive PIM activation menu |
 | `Invoke-PIMApprovals` | Processes pending PIM approval requests |
+| `New-PIMActivation` | Activates PIM roles or groups with command-line parameters and configuration support |
 
 ## Documentation
 
 For detailed documentation of each function, please see:
 
+- [Get-PIMAssignments](docs/Get-PIMAssignments.md)
+- [Get-PIMApprovals](docs/Get-PIMApprovals.md)
 - [Invoke-PIMActivation](docs/Invoke-PIMActivation.md)
 - [Invoke-PIMApprovals](docs/Invoke-PIMApprovals.md)
-- [Get-PIMAssignments](docs/Get-PIMAssignments.md)
+- [New-PIMActivation](docs/New-PIMActivation.md)
 
 Or use PowerShell's built-in help:
 
 ```powershell
-Get-Help Invoke-PIMActivation -Detailed
+Get-Help New-PIMActivation -Detailed
 ```
 
 ## Contributing

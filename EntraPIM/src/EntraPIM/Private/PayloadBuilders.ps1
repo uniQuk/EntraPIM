@@ -187,14 +187,23 @@ function New-PIMGroupPayload {
 .PARAMETER DurationHours
     The duration in hours for the activation.
 
+.PARAMETER StartTime
+    Optional start time for the activation. Defaults to current time if not specified.
+
 .EXAMPLE
     New-PIMScheduleInfo -DurationHours 8
+
+.EXAMPLE
+    New-PIMScheduleInfo -DurationHours 4 -StartTime (Get-Date).AddHours(1)
 #>
 function New-PIMScheduleInfo {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory=$true)]
-        [double]$DurationHours
+        [double]$DurationHours,
+        
+        [Parameter()]
+        [datetime]$StartTime = (Get-Date)
     )
     
     if ($DurationHours -eq [math]::Floor($DurationHours)) { 
@@ -205,7 +214,7 @@ function New-PIMScheduleInfo {
     }
     
     return @{ 
-        "startDateTime" = (Get-Date).ToUniversalTime().ToString("o")
+        "startDateTime" = $StartTime.ToUniversalTime().ToString("o")
         "expiration" = @{ 
             "type" = "afterDuration"
             "duration" = $durationIso 
