@@ -1,8 +1,8 @@
 # EntraPIM.psm1
 # Main module file that imports all functions
 
-#Requires -Version 5.1
-#Requires -Modules @{ ModuleName="Microsoft.Graph.Authentication"; ModuleVersion="1.9.0" }
+#Requires -Version 7.0
+#Requires -Modules @{ ModuleName="Microsoft.Graph.Authentication"; ModuleVersion="2.2.0" }
 
 # Get the module directory
 $ModuleRoot = $PSScriptRoot
