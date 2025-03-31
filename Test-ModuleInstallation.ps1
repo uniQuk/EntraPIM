@@ -11,7 +11,7 @@
     to Microsoft Graph, but simply verifies that the module structure is correct.
 
 .NOTES
-    Author: EntraPIM Team
+    Author: uniQuk (Josh)
     Date:   March 30, 2025
 #>
 

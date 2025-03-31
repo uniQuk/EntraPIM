@@ -3,7 +3,7 @@
     RootModule = 'EntraPIM.psm1'
     
     # Version number of this module.
-    ModuleVersion = '1.0.0'
+    ModuleVersion = '0.1.0'
     
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop', 'Core')
@@ -12,19 +12,19 @@
     GUID = '83d0be38-4db3-4583-a32d-c51859b158c6'
     
     # Author of this module
-    Author = 'EntraPIM Team'
+    Author = 'Josh - https://github.com/uniQuk'
     
     # Company or vendor of this module
-    CompanyName = 'Community'
+    CompanyName = 'uniQuk'
     
     # Copyright statement for this module
-    Copyright = '(c) 2025 EntraPIM Team. All rights reserved.'
+    Copyright = 'MIT License (c) 2025 Josh'
     
     # Description of the functionality provided by this module
     Description = 'EntraPIM is a PowerShell module that simplifies the management of Microsoft Entra Privileged Identity Management (PIM) roles and groups. It provides a streamlined interface for activating, deactivating, extending, and approving PIM assignments.'
     
     # Minimum version of the PowerShell engine required by this module
-    PowerShellVersion = '7.0'
+    PowerShellVersion = '7.0.0'
     
     # Name of the PowerShell host required by this module
     # PowerShellHostName = ''
@@ -45,7 +45,7 @@
     RequiredModules = @(
         @{
             ModuleName = 'Microsoft.Graph.Authentication'
-            ModuleVersion = '1.19.0'
+            ModuleVersion = '2.26.1'
         }
     )
     
@@ -96,17 +96,17 @@
             Tags = @('Entra', 'PIM', 'PrivilegedIdentityManagement', 'Graph', 'MicrosoftEntra')
             
             # A URL to the license for this module.
-            LicenseUri = 'https://github.com/YourUsername/EntraPIM/blob/main/LICENSE'
+            LicenseUri = 'https://github.com/uniQuk/EntraOATH/blob/main/LICENSE'
             
             # A URL to the main website for this project.
-            ProjectUri = 'https://github.com/YourUsername/EntraPIM'
+            ProjectUri = 'https://github.com/uniQuk/EntraPIM'
             
             # A URL to an icon representing this module.
             # IconUri = ''
             
             # ReleaseNotes of this module
             ReleaseNotes = @'
-# Version 1.0.0
+# Version 0.1.0
 - Initial release of EntraPIM module
 - Support for PIM role and group management
 - Interactive menu with persistent state

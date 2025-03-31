@@ -11,7 +11,7 @@
     tasks such as fetching assignments, activating roles, and processing approvals.
 
 .NOTES
-    Author: EntraPIM Team
+    Author: uniQUk (Josh)
     Date:   March 30, 2025
 #>
 

@@ -18,17 +18,20 @@ EntraPIM is a PowerShell module that simplifies the management of Microsoft Entr
 ### From PowerShell Gallery (Recommended)
 
 ```powershell
-Install-Module -Name EntraPIM
+Install-Module -Name EntraPIM -Repository PSGallery -Scope CurrentUser
 ```
 
-### From GitHub
+### Manual Installation from GitHub
 
 ```powershell
 # Clone the repository
-git clone https://github.com/YourUsername/EntraPIM.git
+git clone https://github.com/uniQuk/EntraPIM.git
+
+# Navigate to the module directory
+cd EntraPIM
 
 # Import the module
-Import-Module .\EntraPIM\src\EntraPIM\EntraPIM.psd1
+Import-Module .\src\EntraPIM\EntraPIM.psd1
 ```
 
 ## Requirements
