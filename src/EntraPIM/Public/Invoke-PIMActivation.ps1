@@ -11,7 +11,11 @@
     script, this function keeps the menu active until the user explicitly chooses to exit.
     
     The function supports bulk activation, allowing users to select multiple roles or groups 
-    at once by entering a comma-separated list of menu indices (e.g., "1,3,5").
+    at once by entering a comma-separated list of menu indices (e.g., "1,3,5"). When multiple
+    eligible assignments are selected, the function will prompt once for common values 
+    (duration, justification, ticket) and apply them to all selected eligible assignments.
+    If any assignments fail, the user will be prompted to retry them individually with
+    different values.
 
 .PARAMETER IncludeRoles
     Include role assignments in the menu. Default is $true.
@@ -34,7 +38,10 @@
     
 .EXAMPLE
     # Bulk activation example
-    # At the menu prompt, enter "1,3,5" to select and process items 1, 3, and 5 sequentially.
+    # At the menu prompt, enter "1,3,5" to select and process items 1, 3, and 5.
+    # For multiple eligible assignments, you'll be prompted once for duration, justification, 
+    # and ticket information that will be applied to all selected eligible assignments.
+    # Any failed activations can be retried individually with different values.
 #>
 function Invoke-PIMActivation {
     [CmdletBinding()]
@@ -61,7 +68,15 @@ function Invoke-PIMActivation {
     
     # Function to process a single PIM assignment
     function Process-PIMAssignment {
-        param($selectedItem, $userId, $DefaultDuration)
+        param(
+            $selectedItem, 
+            $userId, 
+            $DefaultDuration,
+            $Duration = $null,
+            $Justification = $null,
+            $Ticket = $null,
+            $PromptForInput = $true
+        )
         
         Write-Host "`nProcessing [$($selectedItem.State) $($selectedItem.Type)] '$($selectedItem.Name)'." -ForegroundColor White
         
@@ -70,11 +85,17 @@ function Invoke-PIMActivation {
             $action = "selfActivate"
             Write-Host "Action: Activate eligible assignment." -ForegroundColor Green
             
-            # Prompt for duration and justification
-            $durationInput = Read-Host "Enter duration in hours (default: $DefaultDuration)"
-            $duration = if ([string]::IsNullOrEmpty($durationInput)) { $DefaultDuration } else { [double]$durationInput }
-            $justification = Read-Host "Enter justification (if required)"
-            $ticket = Read-Host "Enter ticket info (if required)"
+            # Use provided values or prompt for them
+            if ($PromptForInput) {
+                $durationInput = Read-Host "Enter duration in hours (default: $DefaultDuration)"
+                $duration = if ([string]::IsNullOrEmpty($durationInput)) { $DefaultDuration } else { [double]$durationInput }
+                $justification = Read-Host "Enter justification (if required)"
+                $ticket = Read-Host "Enter ticket info (if required)"
+            } else {
+                $duration = if ($null -ne $Duration) { $Duration } else { $DefaultDuration }
+                $justification = if ($null -ne $Justification) { $Justification } else { "" }
+                $ticket = if ($null -ne $Ticket) { $Ticket } else { "" }
+            }
             
             # Create schedule info
             $scheduleInfo = New-PIMScheduleInfo -DurationHours $duration
@@ -108,12 +129,29 @@ function Invoke-PIMActivation {
                 # Display result
                 Write-Host "`nResponse:" -ForegroundColor Green
                 $response | Format-Table
+                
+                # Return success with collected values
+                return @{
+                    Success = $true
+                    Duration = $duration
+                    Justification = $justification
+                    Ticket = $ticket
+                }
             }
             catch {
                 $errorDetails = Get-ErrorDetails -ErrorRecord $_
                 Write-Host "`nError during activation:" -ForegroundColor Red
                 Write-Host $errorDetails.Message -ForegroundColor Red
                 Write-Host $errorDetails.Details -ForegroundColor Red
+                
+                # Return failure with collected values
+                return @{
+                    Success = $false
+                    Duration = $duration
+                    Justification = $justification
+                    Ticket = $ticket
+                    Error = $errorDetails
+                }
             }
         }
         elseif ($selectedItem.State -eq "Active") {
@@ -352,6 +390,10 @@ function Invoke-PIMActivation {
             if ($selectedIndices.Count -gt 0) {
                 Write-Host "`nProcessing $($selectedIndices.Count) selected items..." -ForegroundColor Cyan
                 
+                # Get all selected items and filter out invalid/locked ones
+                $selectedItems = @()
+                $eligibleItems = @()
+                
                 foreach ($idx in $selectedIndices) {
                     $selectedItem = $menuItems | Where-Object { $_.MenuIndex -eq [int]$idx }
                     
@@ -365,13 +407,70 @@ function Invoke-PIMActivation {
                         continue
                     }
                     
-                    # Process the selected item
-                    $result = Process-PIMAssignment -selectedItem $selectedItem -userId $userId -DefaultDuration $DefaultDuration
+                    $selectedItems += $selectedItem
+                    if ($selectedItem.State -eq "Eligible") {
+                        $eligibleItems += $selectedItem
+                    }
+                }
+                
+                # If we have multiple eligible items, collect common values once
+                $bulkDuration = $null
+                $bulkJustification = $null
+                $bulkTicket = $null
+                $failedItems = @()
+                
+                if ($eligibleItems.Count -gt 1) {
+                    Write-Host "`nFound $($eligibleItems.Count) eligible assignments for bulk activation." -ForegroundColor Green
+                    Write-Host "Please provide common values for all eligible assignments:" -ForegroundColor Yellow
                     
-                    # If we're not on the last item, prompt before continuing
-                    if ($idx -ne $selectedIndices[-1]) {
-                        Write-Host "`nPress Enter to continue with next selected item..." -ForegroundColor Cyan
-                        Read-Host | Out-Null
+                    $durationInput = Read-Host "Enter duration in hours (default: $DefaultDuration)"
+                    $bulkDuration = if ([string]::IsNullOrEmpty($durationInput)) { $DefaultDuration } else { [double]$durationInput }
+                    $bulkJustification = Read-Host "Enter justification (if required)"
+                    $bulkTicket = Read-Host "Enter ticket info (if required)"
+                    
+                    Write-Host "`nApplying to all eligible assignments..." -ForegroundColor Cyan
+                }
+                
+                # Process each selected item
+                foreach ($selectedItem in $selectedItems) {
+                    $isEligibleInBulk = ($selectedItem.State -eq "Eligible" -and $eligibleItems.Count -gt 1)
+                    
+                    if ($isEligibleInBulk) {
+                        # Use bulk values for eligible items
+                        $result = Process-PIMAssignment -selectedItem $selectedItem -userId $userId -DefaultDuration $DefaultDuration `
+                                                       -Duration $bulkDuration -Justification $bulkJustification -Ticket $bulkTicket -PromptForInput $false
+                        
+                        if (-not $result.Success) {
+                            $failedItems += @{
+                                Item = $selectedItem
+                                Error = $result.Error
+                            }
+                        }
+                    } else {
+                        # Process individually (for single eligible items or active items)
+                        $result = Process-PIMAssignment -selectedItem $selectedItem -userId $userId -DefaultDuration $DefaultDuration -PromptForInput $true
+                    }
+                    
+                    # Add spacing between items
+                    if ($selectedItem -ne $selectedItems[-1]) {
+                        Write-Host "`n" + ("-" * 50) -ForegroundColor DarkGray
+                    }
+                }
+                
+                # Handle failed items
+                if ($failedItems.Count -gt 0) {
+                    Write-Host "`n⚠️  Some assignments failed to activate:" -ForegroundColor Yellow
+                    foreach ($failed in $failedItems) {
+                        Write-Host "- $($failed.Item.Name): $($failed.Error.Message)" -ForegroundColor Red
+                    }
+                    
+                    $retryChoice = Read-Host "`nWould you like to retry failed items with different values? (Y/N)"
+                    if ($retryChoice -match "^[Yy]") {
+                        Write-Host "`nRetrying failed items individually..." -ForegroundColor Cyan
+                        foreach ($failed in $failedItems) {
+                            Write-Host "`nRetrying: $($failed.Item.Name)" -ForegroundColor Yellow
+                            Process-PIMAssignment -selectedItem $failed.Item -userId $userId -DefaultDuration $DefaultDuration -PromptForInput $true | Out-Null
+                        }
                     }
                 }
                 

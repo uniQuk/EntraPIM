@@ -24,6 +24,14 @@ The menu provides options to:
 - Extend the duration of active assignments
 - Check for and process pending approval requests
 
+### Bulk Activation
+When multiple eligible assignments are selected using comma-separated values (e.g., "1,3,5"), the function will:
+1. Prompt once for common values (duration, justification, ticket information)
+2. Apply these values to all selected eligible assignments
+3. Display any failed activations and offer to retry them individually with different values
+
+This streamlines the process of activating multiple roles or groups simultaneously while handling any assignments that require different parameters.
+
 ## PARAMETERS
 
 ### -IncludeRoles
@@ -121,14 +129,36 @@ Invoke-PIMActivation -DefaultDuration 4
 
 This command opens the interactive menu with a default activation duration of 4 hours.
 
+### Example 4: Bulk activation workflow
+
+```powershell
+Invoke-PIMActivation
+# At the menu prompt, enter: 1,2,4
+# The function will detect multiple eligible assignments and prompt:
+# Enter duration in hours (default: 8): 6
+# Enter justification (if required): Business operations
+# Enter ticket info (if required): TASK-12345
+# All selected assignments will be activated with these common values
+```
+
+This example shows how to activate multiple roles/groups simultaneously with shared parameters.
+
 ## MENU OPTIONS
 
 When the menu is displayed, you'll see the following options:
 
 - **Numbered options (1, 2, 3...)**: Select a specific role or group to activate, deactivate, or extend
+  - **Single selection**: Prompts individually for each parameter
+  - **Multiple selection (comma-separated)**: For eligible assignments, prompts once for common parameters and applies them to all selected items
 - **A**: Check for pending approvals
 - **R**: Refresh the list of assignments
 - **X**: Exit the menu
+
+### Bulk Selection Tips
+- Use comma-separated values to select multiple items: `1,3,5,7`
+- When multiple eligible assignments are selected, you'll be prompted once for duration, justification, and ticket information
+- If any activations fail, you'll be offered the chance to retry them individually with different values
+- Mixed selections (eligible and active assignments) will process eligible items in bulk and active items individually
 
 ## RELATED LINKS
 

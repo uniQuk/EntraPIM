@@ -3,7 +3,7 @@
     RootModule = 'EntraPIM.psm1'
     
     # Version number of this module.
-    ModuleVersion = '0.1.0'
+    ModuleVersion = '0.1.1'
     
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop', 'Core')
@@ -15,7 +15,7 @@
     Author = 'Josh - https://github.com/uniQuk'
     
     # Company or vendor of this module
-    CompanyName = 'uniQuk'
+    CompanyName = 'North7'
     
     # Copyright statement for this module
     Copyright = 'MIT License (c) 2025 Josh'
@@ -106,8 +106,8 @@
             
             # ReleaseNotes of this module
             ReleaseNotes = @'
-# Version 0.1.0
-- Initial release of EntraPIM module
+# Version 0.1.1
+- Improve Bulk Activations
 - Support for PIM role and group management
 - Interactive menu with persistent state
 - Approval processing functionality
